@@ -50,18 +50,27 @@ both should run without errors and save csv files
 config parameters
 
 ib_hist_end_dt is last known date (datetime)
+
 ib_fc_horiz is forecast horizon in days (int)
+
 delays_config_length is delay config length for mid-term split (int)
+
 ts_time_lvl is ts time level like 'DAY', 'WEEK.2', 'MONTH' (str)
+
 ml_time_lvl is ml time level (str)
+
 ib_zero_demand_threshold is threshold for zero demand, default 0.01 (float)
 
 files
 
 src/reconciliation.py has reconciliation logic
+
 src/hybridization.py has hybridization logic
+
 src/test_reconciliation.py has reconciliation tests
+
 src/test_hybridization.py has hybridization tests
+
 notebooks/hybridization.ipynb has example notebook
 
 thats it
