@@ -1,10 +1,3 @@
-"""
-Test script for hybrid forecast generation
-
-This script demonstrates the hybridization algorithm with sample data
-and validates the business rules.
-"""
-
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -17,7 +10,6 @@ def generate_reconciled_forecast_data(
     num_products: int = 5,
     num_locations: int = 3
 ) -> pd.DataFrame:
-    """generate sample reconciled_forecast data for testing"""
     
     dates = pd.date_range(start=start_date, end=end_date, freq='D')
     products = [f'PROD_{i:03d}' for i in range(1, num_products + 1)]
@@ -79,7 +71,6 @@ def generate_reconciled_forecast_data(
 
 
 def test_hybridization():
-    """test hybridization function"""
     
     print("test started")
     
@@ -92,13 +83,13 @@ def test_hybridization():
     
     df_output = hybridization(df_input, ib_zero_demand_threshold=IB_ZERO_DEMAND_THRESHOLD)
     
-    print("\nforecast sources:")
+    print("\nforecast sources")
     print(df_output['FORECAST_SOURCE'].value_counts())
     
-    print("\nsamples:")
+    print("\nsamples")
     
     for source in ['ml', 'ts', 'ensemble']:
-        print(f"\n{source}:")
+        print(f"\n{source}")
         sample = df_output[df_output['FORECAST_SOURCE'] == source].head(3)
         
         if len(sample) > 0:
@@ -111,7 +102,7 @@ def test_hybridization():
         else:
             print("no records")
     
-    print("\nvalidation:")
+    print("\nvalidation")
     
     ml_cases = df_output[
         ((df_output['DEMAND_TYPE'].str.lower() == 'promo') & 
@@ -120,7 +111,7 @@ def test_hybridization():
         (df_output['ASSORTMENT_TYPE'].str.lower() == 'new')
     ]
     ml_correct = (ml_cases['FORECAST_SOURCE'] == 'ml').sum()
-    print(f"rule 1 (ml forecast): {ml_correct}/{len(ml_cases)} cases correctly applied")
+    print(f"rule 1 (ml forecast) {ml_correct}/{len(ml_cases)} cases correctly applied")
     
     ts_cases = df_output[
         ((df_output['SEGMENT_NAME'].str.lower() == 'retired') |
@@ -128,11 +119,11 @@ def test_hybridization():
         (df_output['TS_FORECAST_VALUE'] <= IB_ZERO_DEMAND_THRESHOLD)
     ]
     ts_correct = (ts_cases['FORECAST_SOURCE'] == 'ts').sum()
-    print(f"rule 2 (ts forecast): {ts_correct}/{len(ts_cases)} cases correctly applied")
+    print(f"rule 2 (ts forecast) {ts_correct}/{len(ts_cases)} cases correctly applied")
     
     ensemble_cases = df_output[df_output['FORECAST_SOURCE'] == 'ensemble']
     ensemble_has_value = ensemble_cases['ENSEMBLE_FORECAST_VALUE'].notna().sum()
-    print(f"rule 3 (ensemble): {ensemble_has_value}/{len(ensemble_cases)} cases have ensemble values")
+    print(f"rule 3 (ensemble) {ensemble_has_value}/{len(ensemble_cases)} cases have ensemble values")
     
     print("\ntest complete")
     
@@ -140,9 +131,8 @@ def test_hybridization():
 
 
 def show_detailed_examples():
-    """show examples"""
     
-    print("\ndetailed examples:")
+    print("\ndetailed examples")
     
     test_cases = pd.DataFrame([
         {
@@ -234,19 +224,18 @@ def show_detailed_examples():
     result = hybridization(test_cases)
     
     for idx, row in result.iterrows():
-        print(f"\ncase {idx + 1}: {row['DESCRIPTION']}")
-        print(f"  ts forecast: {row['TS_FORECAST_VALUE']:.3f}")
-        print(f"  ml forecast: {row['ML_FORECAST_VALUE']:.3f}")
-        print(f"  hybrid forecast: {row['HYBRID_FORECAST_VALUE']:.3f}")
-        print(f"  forecast source: {row['FORECAST_SOURCE']}")
+        print(f"\ncase {idx + 1} {row['DESCRIPTION']}")
+        print(f"  ts forecast {row['TS_FORECAST_VALUE']:.3f}")
+        print(f"  ml forecast {row['ML_FORECAST_VALUE']:.3f}")
+        print(f"  hybrid forecast {row['HYBRID_FORECAST_VALUE']:.3f}")
+        print(f"  forecast source {row['FORECAST_SOURCE']}")
         if pd.notna(row['ENSEMBLE_FORECAST_VALUE']):
-            print(f"  ensemble value: {row['ENSEMBLE_FORECAST_VALUE']:.3f}")
+            print(f"  ensemble value {row['ENSEMBLE_FORECAST_VALUE']:.3f}")
 
 
 def test_mid_term_hybrid_forecast():
-    """test mid-term forecast"""
     
-    print("\nmid-term test:")
+    print("\nmid-term test")
     
     from hybridization import create_mid_term_hybrid_forecast
     
@@ -291,20 +280,20 @@ def test_mid_term_hybrid_forecast():
     
     df_output = create_mid_term_hybrid_forecast(df_input)
     
-    print("validation:")
+    print("validation")
     
     required_columns = ['HYBRID_FORECAST_VALUE', 'TS_FORECAST_VALUE', 'FORECAST_SOURCE', 'ENSEMBLE_FORECAST_VALUE']
     missing_columns = [col for col in required_columns if col not in df_output.columns]
     
     if missing_columns:
-        print(f"missing columns: {missing_columns}")
+        print(f"missing columns {missing_columns}")
     else:
         print(f"all required columns present")
     
     if 'HYBRID_FORECAST_VALUE' in df_output.columns and 'TS_FORECAST_VALUE' in df_output.columns:
         matches = (df_output['HYBRID_FORECAST_VALUE'] == df_output['TS_FORECAST_VALUE']).sum()
         total = len(df_output)
-        print(f"hybrid = ts: {matches}/{total}")
+        print(f"hybrid = ts {matches}/{total}")
         
         if matches != total:
             print("mismatch detected")
@@ -313,7 +302,7 @@ def test_mid_term_hybrid_forecast():
     if 'FORECAST_SOURCE' in df_output.columns:
         ts_count = (df_output['FORECAST_SOURCE'] == 'ts').sum()
         total = len(df_output)
-        print(f"forecast source is ts: {ts_count}/{total}")
+        print(f"forecast source is ts {ts_count}/{total}")
         
         if ts_count != total:
             print("some forecast sources are not ts")
@@ -322,9 +311,9 @@ def test_mid_term_hybrid_forecast():
     if 'ENSEMBLE_FORECAST_VALUE' in df_output.columns:
         nan_count = df_output['ENSEMBLE_FORECAST_VALUE'].isna().sum()
         total = len(df_output)
-        print(f"ensemble is nan: {nan_count}/{total}")
+        print(f"ensemble is nan {nan_count}/{total}")
     
-    print("\nsample output:")
+    print("\nsample output")
     cols_to_show = ['PRODUCT_LVL_ID', 'TS_FORECAST_VALUE', 'HYBRID_FORECAST_VALUE', 
                     'FORECAST_SOURCE', 'ENSEMBLE_FORECAST_VALUE']
     print(df_output[cols_to_show].to_string(index=False))
@@ -341,9 +330,9 @@ if __name__ == '__main__':
     
     output_file = 'hybrid_forecast_output.csv'
     df_result.to_csv(output_file, index=False)
-    print(f"\nresults saved to: {output_file}")
+    print(f"\nresults saved to {output_file}")
     
     output_file_mid = 'mid_term_hybrid_forecast_output.csv'
     df_mid_term.to_csv(output_file_mid, index=False)
-    print(f"mid-term saved to: {output_file_mid}")
+    print(f"mid-term saved to {output_file_mid}")
 
