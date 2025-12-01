@@ -1,99 +1,174 @@
-import pandas as pd, numpy as np,datetime
+"""
+hybrid forecast generation module
 
-IB_ZERO_DEMAND_THRESHOLD = 0.001
+merges ts and ml forecasts into single hybrid forecast value
+
+business rules:
+- ml forecast: promo, short lifecycle, new assortment
+- ts forecast: retired, low volume, near-zero forecasts  
+- ensemble: average for all other cases
+
+todo:
+    1. adaptive selection instead of simple average
+    2. config file for consolidation rules
+    3. multi-level reconciliation support
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Optional
 
 
-def generate_data(PERIOD_DT: datetime.datetime, PERIOD_END_DT: datetime.datetime) -> pd.DataFrame:
+# config
+# todo: move to external config file
+IB_ZERO_DEMAND_THRESHOLD = 0.01
+
+
+def hybridization(
+    reconciled_forecast: pd.DataFrame,
+    ib_zero_demand_threshold: float = IB_ZERO_DEMAND_THRESHOLD
+) -> pd.DataFrame:
     """
-    Function generating input data
-
-    Parameters
+    generate hybrid forecast by consolidating ts and ml forecast values
+    
+    parameters
     ----------
-    PERIOD_DT : datetime.datetime
-        First known date
-    PERIOD_END_DT : datetime.datetime
-        Last known date (i.e. sales and stock information is known)
-
-    Returns
+    reconciled_forecast : pd.dataframe
+        input dataframe with reconciled forecasts
+        
+    ib_zero_demand_threshold : float
+        threshold for zero demand, default 0.01
+    
+    returns
     -------
-    pd.DataFrame
-        input data of the algorithm
-	"""
-
-    date = pd.date_range(PERIOD_DT, PERIOD_END_DT, freq='D')
-    size = len(date)
-
-    VF_FORECAST_VALUE = abs(np.random.normal(size=size))
-    ML_FORECAST_VALUE = abs(np.random.normal(size=size))
-    MID_RECONCILED_FORECAST = abs(np.random.normal(size=size))
-    DEMAND_TYPE = np.random.choice(['promo', 'regular'], size=size)
-    ASSORTMENT_TYPE = np.random.choice(['new', 'old'], size=size)
-    PRODUCT_LVL_ID1 = np.random.choice([10084, 10091, 12121, 12311], size=size)
-    LOCATION_LVL_ID = np.full(size, 10000)
-    HYBRID_FORECAST_VALUE = abs(np.random.normal(size=size))
-    DISTR_CHANNEL_LVL_ID = np.random.choice([1, 2, 3, 4], size=size)
-    CUSTOMER_LVL_ID1 = np.random.choice(range(900000, 1000000), size=size)
-    SEGMENT_NAME = np.random.choice(['Low Volume', 'Retired', 'Short'], size=size)
-
-    df = pd.concat([pd.Series(i) for i in
-                    [date, SEGMENT_NAME, HYBRID_FORECAST_VALUE, CUSTOMER_LVL_ID1, DISTR_CHANNEL_LVL_ID,
-                     VF_FORECAST_VALUE, ML_FORECAST_VALUE,
-                     MID_RECONCILED_FORECAST, DEMAND_TYPE, ASSORTMENT_TYPE,
-                     PRODUCT_LVL_ID1, LOCATION_LVL_ID, ]], axis=1)
-    df.columns = ['date', 'SEGMENT_NAME', 'HYBRID_FORECAST_VALUE', 'CUSTOMER_LVL_ID1', 'DISTR_CHANNEL_LVL_ID',
-                  'VF_FORECAST_VALUE', 'ML_FORECAST_VALUE',
-                  'MID_RECONCILED_FORECAST', 'DEMAND_TYPE', 'ASSORTMENT_TYPE',
-                  'PRODUCT_LVL_ID1', 'LOCATION_LVL_ID']
+    pd.dataframe
+        hybrid forecast table with hybrid_forecast_value, ensemble_forecast_value, forecast_source
+    
+    algorithm logic
+    ---------------
+    1. fill missing values
+    2. determine hybrid_forecast_value based on rules:
+       - ml: promo (not retired), short segments, new assortment
+       - ts: retired/low volume with low ts forecast
+       - ensemble: average for all other cases
+    3. set forecast_source
+    4. calculate ensemble_forecast_value
+    """
+    
+    df = reconciled_forecast.copy()
+    
+    if 'TS_FORECAST_VALUE_REC' in df.columns and 'ML_FORECAST_VALUE' in df.columns:
+        df['TS_FORECAST_VALUE_F'] = df['TS_FORECAST_VALUE_REC'].fillna(df['ML_FORECAST_VALUE'])
+    elif 'TS_FORECAST_VALUE_REC' in df.columns:
+        df['TS_FORECAST_VALUE_F'] = df['TS_FORECAST_VALUE_REC']
+    else:
+        df['TS_FORECAST_VALUE_F'] = df.get('ML_FORECAST_VALUE', np.nan)
+    
+    if 'ML_FORECAST_VALUE' in df.columns and 'TS_FORECAST_VALUE_REC' in df.columns:
+        df['ML_FORECAST_VALUE_F'] = df['ML_FORECAST_VALUE'].fillna(df['TS_FORECAST_VALUE_REC'])
+    elif 'ML_FORECAST_VALUE' in df.columns:
+        df['ML_FORECAST_VALUE_F'] = df['ML_FORECAST_VALUE']
+    else:
+        df['ML_FORECAST_VALUE_F'] = df.get('TS_FORECAST_VALUE_REC', np.nan)
+    
+    if 'SEGMENT_NAME' not in df.columns:
+        df['SEGMENT_NAME'] = ''
+    else:
+        df['SEGMENT_NAME'] = df['SEGMENT_NAME'].fillna('')
+    
+    df['DEMAND_TYPE_LOWER'] = df['DEMAND_TYPE'].str.lower() if 'DEMAND_TYPE' in df.columns else ''
+    df['SEGMENT_NAME_LOWER'] = df['SEGMENT_NAME'].str.lower()
+    df['ASSORTMENT_TYPE_LOWER'] = df['ASSORTMENT_TYPE'].str.lower() if 'ASSORTMENT_TYPE' in df.columns else ''
+    
+    def calculate_hybrid_forecast(row):
+        """apply business rules to determine hybrid forecast value"""
+        if ((row['DEMAND_TYPE_LOWER'] == 'promo' and row['SEGMENT_NAME_LOWER'] != 'retired') or
+            row['SEGMENT_NAME_LOWER'] == 'short' or
+            row['ASSORTMENT_TYPE_LOWER'] == 'new'):
+            return row['ML_FORECAST_VALUE_F']
+        
+        # TODO: Rule 2 - Use TS forecast for retired/low volume with low forecast
+        # ELSE CASE WHEN (SEGMENT_NAME = 'Retired' OR SEGMENT_NAME = 'Low Volume')
+        #               TS_FORECAST_VALUE_F <= IB_ZERO_DEMAND_THRESHOLD
+        # THEN TS_FORECAST_VALUE_F
+        elif ((row['SEGMENT_NAME_LOWER'] == 'retired' or row['SEGMENT_NAME_LOWER'] == 'low volume') and
+              row['TS_FORECAST_VALUE_F'] <= ib_zero_demand_threshold):
+            return row['TS_FORECAST_VALUE_F']
+        
+        # TODO: Rule 3 - Use average (ensemble) for all other cases
+        # TODO Enhancement #1: Replace with Adaptive Selection method
+        # ELSE AVERAGE(TS_FORECAST_VALUE_F, ML_FORECAST_VALUE_F)
+        else:
+            # Average handles NaN values: AVERAGE(missing, 1) = 1; AVERAGE(missing, missing) = missing
+            values = [row['TS_FORECAST_VALUE_F'], row['ML_FORECAST_VALUE_F']]
+            valid_values = [v for v in values if pd.notna(v)]
+            if len(valid_values) > 0:
+                return np.mean(valid_values)
+            else:
+                return np.nan
+    
+    def calculate_forecast_source(row):
+        """determine which forecast source was used"""
+        if ((row['DEMAND_TYPE_LOWER'] == 'promo' and row['SEGMENT_NAME_LOWER'] != 'retired') or
+            row['SEGMENT_NAME_LOWER'] == 'short' or
+            row['ASSORTMENT_TYPE_LOWER'] == 'new'):
+            return 'ml'
+        elif ((row['SEGMENT_NAME_LOWER'] == 'retired' or row['SEGMENT_NAME_LOWER'] == 'low volume') and
+              row['TS_FORECAST_VALUE_F'] <= ib_zero_demand_threshold):
+            return 'ts'
+        else:
+            return 'ensemble'
+    
+    def calculate_ensemble_value(row):
+        """calculate ensemble value"""
+        if ((row['DEMAND_TYPE_LOWER'] == 'promo' and row['SEGMENT_NAME_LOWER'] != 'retired') or
+            row['SEGMENT_NAME_LOWER'] == 'short' or
+            row['ASSORTMENT_TYPE_LOWER'] == 'new'):
+            return np.nan
+        elif ((row['SEGMENT_NAME_LOWER'] == 'retired' or row['SEGMENT_NAME_LOWER'] == 'low volume') and
+              row['TS_FORECAST_VALUE_F'] <= ib_zero_demand_threshold):
+            return np.nan
+        else:
+            values = [row['TS_FORECAST_VALUE_F'], row['ML_FORECAST_VALUE_F']]
+            valid_values = [v for v in values if pd.notna(v)]
+            if len(valid_values) > 0:
+                return np.mean(valid_values)
+            else:
+                return np.nan
+    
+    df['HYBRID_FORECAST_VALUE'] = df.apply(calculate_hybrid_forecast, axis=1)
+    df['FORECAST_SOURCE'] = df.apply(calculate_forecast_source, axis=1)
+    df['ENSEMBLE_FORECAST_VALUE'] = df.apply(calculate_ensemble_value, axis=1)
+    
+    if 'TS_FORECAST_VALUE_REC' in df.columns:
+        df['TS_FORECAST_VALUE'] = df['TS_FORECAST_VALUE_REC']
+    
+    df = df.drop(columns=['DEMAND_TYPE_LOWER', 'SEGMENT_NAME_LOWER', 'ASSORTMENT_TYPE_LOWER',
+                          'TS_FORECAST_VALUE_F', 'ML_FORECAST_VALUE_F'], errors='ignore')
+    
     return df
 
 
-def hybridization(data: pd.DataFrame) -> pd.DataFrame:
+def create_mid_term_hybrid_forecast(reconciled_forecast: pd.DataFrame) -> pd.DataFrame:
     """
-    Function generating input data
-
-    Parameters
+    create mid-term hybrid forecast by selecting ts forecast as hybrid forecast
+    
+    parameters
     ----------
-    data : pd.Dataframe
-        Input table 
-
-    Returns
+    reconciled_forecast : pd.dataframe
+        input dataframe with mid_reconciled_forecast data
+        
+    returns
     -------
-    pd.DataFrame
-        Transformed table with hybridized forecasts
+    pd.dataframe
+        dataframe with hybrid_forecast_value set to ts_forecast_value
     """
-
-
-    if 'ML_FORECAST_VALUE' not in data:
-        data['ML_FORECAST_VALUE_F'] = data.VF_FORECAST_VALUE
-
-    if 'VF_FORECAST_VALUE' not in data.columns:
-        data['VF_FORECAST_VALUE_F'] = data.ML_FORECAST_VALUE
-
-    HYBRID_FORECAST_VALUE = []
-    FORECAST_SOURCE = []
-    ENSEMBLE_FORECAST_VALUE = []
-
-
-    for _, row in data.iterrows():
-        if (row.DEMAND_TYPE.lower() == 'promo' and row.SEGMENT_NAME.lower() != 'retired') or row.SEGMENT_NAME.lower() == 'short' or \
-                row.ASSORTMENT_TYPE.lower() == 'new':
-            HYBRID_FORECAST_VALUE.append(row.ML_FORECAST_VALUE)
-            FORECAST_SOURCE.append('ml')
-            ENSEMBLE_FORECAST_VALUE.append(np.nan)
-        elif row.SEGMENT_NAME.lower() == 'retired' or row.SEGMENT_NAME.lower() == 'low volume':
-            VF_FORECAST_VALUE_F = IB_ZERO_DEMAND_THRESHOLD
-            HYBRID_FORECAST_VALUE.append(VF_FORECAST_VALUE_F)
-            FORECAST_SOURCE.append('vf')
-            ENSEMBLE_FORECAST_VALUE.append(np.nan)
-        else:
-            HYBRID_FORECAST_VALUE.append(np.mean(row.ML_FORECAST_VALUE, row.VF_FORECAST_VALUE))
-            FORECAST_SOURCE.append('ensemble')
-            ENSEMBLE_FORECAST_VALUE.append(np.mean(row.ML_FORECAST_VALUE, row.VF_FORECAST_VALUE))
-    HYBRID_FORECAST_VALUE = pd.Series(HYBRID_FORECAST_VALUE)
-    FORECAST_SOURCE = pd.Series(FORECAST_SOURCE)
-    ENSEMBLE_FORECAST_VALUE = pd.Series(ENSEMBLE_FORECAST_VALUE)
-    data['HYBRID_FORECAST_VALUE'] = HYBRID_FORECAST_VALUE
-    data['FORECAST_SOURCE'] = FORECAST_SOURCE
-    data['ENSEMBLE_FORECAST_VALUE'] = ENSEMBLE_FORECAST_VALUE
-
-    return data
+    df = reconciled_forecast.copy()
+    
+    if 'TS_FORECAST_VALUE_REC' in df.columns:
+        df['HYBRID_FORECAST_VALUE'] = df['TS_FORECAST_VALUE_REC']
+        df['TS_FORECAST_VALUE'] = df['TS_FORECAST_VALUE_REC']
+        df['FORECAST_SOURCE'] = 'ts'
+        df['ENSEMBLE_FORECAST_VALUE'] = np.nan
+    
+    return df
