@@ -61,6 +61,18 @@ ml_time_lvl is ml time level (str)
 
 ib_zero_demand_threshold is threshold for zero demand, default 0.01 (float)
 
+visualization
+```bash
+cd src
+python visualize_pipeline.py
+python visualize_results.py
+```
+visualize_pipeline.py generates 3 flowchart images (pipeline_flow.png, reconciliation_flow.png, hybridization_flow.png)
+
+visualize_results.py generates 3 result images (results_comparison.png, results_table.png, results_statistics.png)
+
+all images saved to visualizations/ folder
+
 files
 
 src/reconciliation.py has reconciliation logic
@@ -70,6 +82,12 @@ src/hybridization.py has hybridization logic
 src/test_reconciliation.py has reconciliation tests
 
 src/test_hybridization.py has hybridization tests
+
+src/visualize_pipeline.py has pipeline visualization
+
+src/visualize_results.py has results visualization (tables and graphs)
+
+visualizations/ has all generated visualization images
 
 notebooks/hybridization.ipynb has example notebook
 
