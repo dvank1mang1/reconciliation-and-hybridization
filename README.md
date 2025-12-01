@@ -10,6 +10,7 @@ hybridization merges reconciled forecasts into single hybrid forecast using busi
 
 usage
 
+```python
 from reconciliation import reconciliation
 from hybridization import hybridization
 
@@ -22,6 +23,7 @@ config = {
 df_reconciled = reconciliation(df_ts, df_ml, df_segments, config)
 df_hybrid = hybridization(df_reconciled)
 print(df_hybrid[['PRODUCT_LVL_ID', 'HYBRID_FORECAST_VALUE', 'FORECAST_SOURCE']])
+```
 
 input data
 
@@ -37,9 +39,11 @@ hybrid_forecast has same as reconciled plus hybrid_forecast_value, ensemble_fore
 
 test
 
+```bash
 cd src
 python test_reconciliation.py
 python test_hybridization.py
+```
 
 both should run without errors and save csv files
 
