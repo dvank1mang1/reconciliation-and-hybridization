@@ -1,12 +1,5 @@
-"""
-hybridization module
-
-merges ts and ml forecasts
-"""
-
 import pandas as pd
 import numpy as np
-from typing import Optional
 
 
 IB_ZERO_DEMAND_THRESHOLD = 0.01
@@ -16,7 +9,6 @@ def hybridization(
     reconciled_forecast: pd.DataFrame,
     ib_zero_demand_threshold: float = IB_ZERO_DEMAND_THRESHOLD
 ) -> pd.DataFrame:
-    """merge ts and ml forecasts into hybrid"""
     
     df = reconciled_forecast.copy()
     
@@ -35,13 +27,17 @@ def hybridization(
         df['ML_FORECAST_VALUE_F'] = df.get('TS_FORECAST_VALUE_REC', np.nan)
     
     if 'SEGMENT_NAME' not in df.columns:
-        df['SEGMENT_NAME'] = ''
-    else:
-        df['SEGMENT_NAME'] = df['SEGMENT_NAME'].fillna('')
+        df['SEGMENT_NAME'] = np.nan
     
-    df['DEMAND_TYPE_LOWER'] = df['DEMAND_TYPE'].str.lower() if 'DEMAND_TYPE' in df.columns else ''
-    df['SEGMENT_NAME_LOWER'] = df['SEGMENT_NAME'].str.lower()
-    df['ASSORTMENT_TYPE_LOWER'] = df['ASSORTMENT_TYPE'].str.lower() if 'ASSORTMENT_TYPE' in df.columns else ''
+    if 'DEMAND_TYPE' not in df.columns:
+        df['DEMAND_TYPE'] = np.nan
+    
+    if 'ASSORTMENT_TYPE' not in df.columns:
+        df['ASSORTMENT_TYPE'] = np.nan
+    
+    df['DEMAND_TYPE_LOWER'] = df['DEMAND_TYPE'].fillna('').astype(str).str.lower()
+    df['SEGMENT_NAME_LOWER'] = df['SEGMENT_NAME'].fillna('').astype(str).str.lower()
+    df['ASSORTMENT_TYPE_LOWER'] = df['ASSORTMENT_TYPE'].fillna('').astype(str).str.lower()
     
     def calculate_hybrid_forecast(row):
         if ((row['DEMAND_TYPE_LOWER'] == 'promo' and row['SEGMENT_NAME_LOWER'] != 'retired') or
@@ -52,12 +48,15 @@ def hybridization(
               row['TS_FORECAST_VALUE_F'] <= ib_zero_demand_threshold):
             return row['TS_FORECAST_VALUE_F']
         else:
-            values = [row['TS_FORECAST_VALUE_F'], row['ML_FORECAST_VALUE_F']]
-            valid_values = [v for v in values if pd.notna(v)]
-            if len(valid_values) > 0:
-                return np.mean(valid_values)
+            if pd.notna(row['TS_FORECAST_VALUE_F']) and row['TS_FORECAST_VALUE_F'] <= ib_zero_demand_threshold:
+                return row['TS_FORECAST_VALUE_F']
             else:
-                return np.nan
+                values = [row['TS_FORECAST_VALUE_F'], row['ML_FORECAST_VALUE_F']]
+                valid_values = [v for v in values if pd.notna(v)]
+                if len(valid_values) > 0:
+                    return np.mean(valid_values)
+                else:
+                    return np.nan
     
     def calculate_forecast_source(row):
         if ((row['DEMAND_TYPE_LOWER'] == 'promo' and row['SEGMENT_NAME_LOWER'] != 'retired') or
@@ -93,6 +92,9 @@ def hybridization(
     if 'TS_FORECAST_VALUE_REC' in df.columns:
         df['TS_FORECAST_VALUE'] = df['TS_FORECAST_VALUE_REC']
     
+    if 'ML_FORECAST_VALUE' not in df.columns:
+        df['ML_FORECAST_VALUE'] = np.nan
+    
     df = df.drop(columns=['DEMAND_TYPE_LOWER', 'SEGMENT_NAME_LOWER', 'ASSORTMENT_TYPE_LOWER',
                           'TS_FORECAST_VALUE_F', 'ML_FORECAST_VALUE_F'], errors='ignore')
     
@@ -100,7 +102,7 @@ def hybridization(
 
 
 def create_mid_term_hybrid_forecast(reconciled_forecast: pd.DataFrame) -> pd.DataFrame:
-    """create mid-term hybrid forecast"""
+    
     df = reconciled_forecast.copy()
     
     if 'TS_FORECAST_VALUE_REC' in df.columns:
@@ -108,5 +110,8 @@ def create_mid_term_hybrid_forecast(reconciled_forecast: pd.DataFrame) -> pd.Dat
         df['TS_FORECAST_VALUE'] = df['TS_FORECAST_VALUE_REC']
         df['FORECAST_SOURCE'] = 'ts'
         df['ENSEMBLE_FORECAST_VALUE'] = np.nan
+    
+    if 'ML_FORECAST_VALUE' not in df.columns:
+        df['ML_FORECAST_VALUE'] = np.nan
     
     return df

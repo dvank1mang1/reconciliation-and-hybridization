@@ -1,13 +1,6 @@
-"""
-reconciliation module
-
-brings ml and ts forecasts to same granularity
-"""
-
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Optional
 
 
 def number_days(time_lvl, period_dt):
@@ -27,7 +20,6 @@ def reconciliation(
     ts_segments: pd.DataFrame = None,
     config: dict = None
 ) -> pd.DataFrame:
-    """reconcile ts and ml forecasts"""
     
     if config is None:
         config = {}
@@ -110,33 +102,42 @@ def reconciliation(
     
     df_ml['ML_FORECAST_VALUE'] = df_ml.apply(
         lambda x: x['ML_FORECAST_VALUE'] * ((x['PERIOD_END_DT'] - x['PERIOD_DT']).days + 1) / x['ml_days']
-        if x['ml_days'] > 0 else x['ML_FORECAST_VALUE'],
+        if pd.notna(x['ML_FORECAST_VALUE']) and x['ml_days'] > 0 else x['ML_FORECAST_VALUE'],
         axis=1
     )
     
     df_ts['TS_FORECAST_VALUE'] = df_ts.apply(
         lambda x: x['TS_FORECAST_VALUE'] * ((x['PERIOD_END_DT'] - x['PERIOD_DT']).days + 1) / x['ts_days']
-        if x['ts_days'] > 0 else x['TS_FORECAST_VALUE'],
+        if pd.notna(x['TS_FORECAST_VALUE']) and x['ts_days'] > 0 else x['TS_FORECAST_VALUE'],
         axis=1
     )
     
-    df_joined = pd.merge(
-        df_ml,
-        df_ts,
-        on=['product_lvl_id', 'location_lvl_id', 'customer_lvl_id', 
-            'distr_channel_lvl_id', 'PERIOD_DT'],
-        how='left',
-        suffixes=('_ml', '_ts')
-    )
+    df_ml['_merge_key'] = 1
+    df_ts['_merge_key'] = 1
+    df_joined = df_ml.merge(df_ts, on='_merge_key', how='left', suffixes=('_ml', '_ts'))
+    df_joined = df_joined[
+        (df_joined['PERIOD_DT_ml'] <= df_joined['PERIOD_END_DT_ts']) &
+        (df_joined['PERIOD_END_DT_ml'] >= df_joined['PERIOD_DT_ts']) &
+        (df_joined['product_lvl_id_ml'] == df_joined['product_lvl_id_ts']) &
+        (df_joined['location_lvl_id_ml'] == df_joined['location_lvl_id_ts']) &
+        (df_joined['customer_lvl_id_ml'] == df_joined['customer_lvl_id_ts']) &
+        (df_joined['distr_channel_lvl_id_ml'] == df_joined['distr_channel_lvl_id_ts'])
+    ].copy()
     
-    df_joined['PERIOD_END_DT'] = df_joined['PERIOD_END_DT_ml'].fillna(df_joined['PERIOD_END_DT_ts'])
+    df_joined['PERIOD_DT'] = df_joined[['PERIOD_DT_ml', 'PERIOD_DT_ts']].max(axis=1)
+    df_joined['PERIOD_END_DT'] = df_joined[['PERIOD_END_DT_ml', 'PERIOD_END_DT_ts']].min(axis=1)
+    
+    df_joined['product_lvl_id'] = df_joined['product_lvl_id_ml']
+    df_joined['location_lvl_id'] = df_joined['location_lvl_id_ml']
+    df_joined['customer_lvl_id'] = df_joined['customer_lvl_id_ml']
+    df_joined['distr_channel_lvl_id'] = df_joined['distr_channel_lvl_id_ml']
     
     df_joined['TS_FORECAST_VALUE'] = df_joined['TS_FORECAST_VALUE'].fillna(0)
     
     group_cols = ['product_lvl_id', 'location_lvl_id', 'customer_lvl_id', 
                   'distr_channel_lvl_id', 'PERIOD_DT']
     
-    df_reconciled = df_joined.groupby(group_cols, as_index=False).agg({
+    df_t1 = df_joined.groupby(group_cols, as_index=False).agg({
         'PERIOD_END_DT': 'min',
         'TS_FORECAST_VALUE': 'sum',
         'ML_FORECAST_VALUE': 'first',
@@ -144,32 +145,53 @@ def reconciliation(
         'ASSORTMENT_TYPE': 'first' if 'ASSORTMENT_TYPE' in df_joined.columns else lambda x: 'old'
     })
     
+    reconciliation_group_cols = ['product_lvl_id', 'location_lvl_id', 'customer_lvl_id', 
+                                  'distr_channel_lvl_id', 'PERIOD_DT']
+    
+    ml_totals = df_t1.groupby(reconciliation_group_cols, as_index=False)['ML_FORECAST_VALUE'].sum()
+    ts_totals = df_t1.groupby(reconciliation_group_cols, as_index=False)['TS_FORECAST_VALUE'].sum()
+    
+    df_totals = ml_totals.merge(ts_totals, on=reconciliation_group_cols, how='outer', suffixes=('_ml', '_ts'))
+    df_totals['reconciliation_ratio'] = df_totals.apply(
+        lambda x: x['ML_FORECAST_VALUE'] / x['TS_FORECAST_VALUE']
+        if pd.notna(x['TS_FORECAST_VALUE']) and x['TS_FORECAST_VALUE'] > 0 and pd.notna(x['ML_FORECAST_VALUE'])
+        else (1.0 if pd.notna(x['TS_FORECAST_VALUE']) and x['TS_FORECAST_VALUE'] > 0 else 0.0),
+        axis=1
+    )
+    
+    df_t2 = df_t1.merge(
+        df_totals[reconciliation_group_cols + ['reconciliation_ratio']],
+        on=reconciliation_group_cols,
+        how='left'
+    )
+    
+    df_t2['TS_FORECAST_VALUE_REC'] = df_t2['TS_FORECAST_VALUE'] * df_t2['reconciliation_ratio'].fillna(1.0)
+    df_t2 = df_t2.drop(columns=['reconciliation_ratio'], errors='ignore')
+    
     if ts_segments is not None:
-        df_reconciled = pd.merge(
-            df_reconciled,
+        df_t2 = pd.merge(
+            df_t2,
             ts_segments,
             on=['product_lvl_id', 'location_lvl_id', 'customer_lvl_id', 'distr_channel_lvl_id'],
             how='left'
         )
     
-    df_reconciled = df_reconciled.rename(columns={
-        'TS_FORECAST_VALUE': 'TS_FORECAST_VALUE_REC'
-    })
-    
-    df_reconciled['PRODUCT_LVL_ID'] = df_reconciled['product_lvl_id']
-    df_reconciled['LOCATION_LVL_ID'] = df_reconciled['location_lvl_id']
-    df_reconciled['CUSTOMER_LVL_ID'] = df_reconciled['customer_lvl_id']
-    df_reconciled['DISTR_CHANNEL_LVL_ID'] = df_reconciled['distr_channel_lvl_id']
+    df_t2['PRODUCT_LVL_ID'] = df_t2['product_lvl_id']
+    df_t2['LOCATION_LVL_ID'] = df_t2['location_lvl_id']
+    df_t2['CUSTOMER_LVL_ID'] = df_t2['customer_lvl_id']
+    df_t2['DISTR_CHANNEL_LVL_ID'] = df_t2['distr_channel_lvl_id']
     
     if len(mid_reconciled_dfs) > 0:
         for df_mid in mid_reconciled_dfs:
             if 'FORECAST_VALUE' in df_mid.columns:
                 df_mid = df_mid.rename(columns={'FORECAST_VALUE': 'TS_FORECAST_VALUE_REC'})
-            df_mid['PRODUCT_LVL_ID'] = df_mid.get('product_lvl_id', df_mid.get('PRODUCT_LVL_ID'))
-            df_mid['LOCATION_LVL_ID'] = df_mid.get('location_lvl_id', df_mid.get('LOCATION_LVL_ID'))
-            df_mid['CUSTOMER_LVL_ID'] = df_mid.get('customer_lvl_id', df_mid.get('CUSTOMER_LVL_ID'))
-            df_mid['DISTR_CHANNEL_LVL_ID'] = df_mid.get('distr_channel_lvl_id', df_mid.get('DISTR_CHANNEL_LVL_ID'))
-        df_reconciled = pd.concat([df_reconciled] + mid_reconciled_dfs, ignore_index=True)
+            if 'TS_FORECAST_VALUE_REC' not in df_mid.columns and 'TS_FORECAST_VALUE' in df_mid.columns:
+                df_mid = df_mid.rename(columns={'TS_FORECAST_VALUE': 'TS_FORECAST_VALUE_REC'})
+            df_mid['PRODUCT_LVL_ID'] = df_mid.get('product_lvl_id', df_mid.get('PRODUCT_LVL_ID', ''))
+            df_mid['LOCATION_LVL_ID'] = df_mid.get('location_lvl_id', df_mid.get('LOCATION_LVL_ID', ''))
+            df_mid['CUSTOMER_LVL_ID'] = df_mid.get('customer_lvl_id', df_mid.get('CUSTOMER_LVL_ID', ''))
+            df_mid['DISTR_CHANNEL_LVL_ID'] = df_mid.get('distr_channel_lvl_id', df_mid.get('DISTR_CHANNEL_LVL_ID', ''))
+        df_t2 = pd.concat([df_t2] + mid_reconciled_dfs, ignore_index=True)
     
-    return df_reconciled
+    return df_t2
 
